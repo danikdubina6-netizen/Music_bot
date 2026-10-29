@@ -46,7 +46,6 @@ async def cmd_playlist(message: Message):
     for idx, track in enumerate(playlists[user_id]):
         title = track['title']
         text += f"{idx + 1}. {title}\n"
-        # Кнопка для быстрого скачивания трека из плейлиста
         keyboard.append([InlineKeyboardButton(text=f"▶️ {title[:30]}...", callback_data=f"play_saved_{idx}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -60,7 +59,6 @@ async def search_music(message: Message):
 
     waiting_msg = await message.answer(f"🔍 Ищу варианты для: *{query}*...", parse_mode="Markdown")
 
-    # Быстрый поиск топ-3 результатов без скачивания
     ydl_opts = {
         'default_search': 'ytsearch3',
         'noplaylist': True,
@@ -71,22 +69,27 @@ async def search_music(message: Message):
     try:
         def search():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Сначала ищем по точному запросу пользователя
                 info = ydl.extract_info(query, download=False)
-                return info.get('entries', [])
+                entries = info.get('entries', [])
+                
+                # Если ничего не нашли, смягчаем поиск и добавляем "audio"
+                if not entries:
+                    info = ydl.extract_info(f"{query} audio", download=False)
+                    entries = info.get('entries', [])
+                return entries
 
         loop = asyncio.get_running_loop()
         entries = await loop.run_in_executor(None, search)
 
         if not entries:
-            await waiting_msg.edit_text("❌ Ничего не найдено по твоему запросу.")
+            await waiting_msg.edit_text("❌ Ничего не найдено. Попробуй указать исполнителя и название точнее (например: *АлСми - Рюмочка водочки*).")
             return
 
         keyboard = []
-        # Сохраняем временные ссылки для кнопок (передаем URL видео)
         for entry in entries:
             title = entry.get('title', 'Unknown Track')
             url = entry.get('url') or f"https://www.youtube.com/watch?v={entry.get('id')}"
-            # Обрезаем длинные названия для кнопки
             btn_text = title[:45] + ("..." if len(title) > 45 else "")
             keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"dl_{url[:50]}")])
 
@@ -96,10 +99,10 @@ async def search_music(message: Message):
     except Exception as e:
         await waiting_msg.edit_text(f"⚠️ Ошибка при поиске: {e}")
 
-# Обработка нажатия на кнопку скачивания из поиска
+# Скачивание выбранного трека
 @dp.callback_query(F.data.startswith("dl_"))
 async def process_download(callback: CallbackQuery):
-    url = callback.data[3:] # получаем сохраненную ссылку
+    url = callback.data[3:]
     await callback.message.edit_text("📥 Скачиваю и конвертирую трек...")
 
     ydl_opts = {
@@ -131,13 +134,12 @@ async def process_download(callback: CallbackQuery):
         if os.path.exists(file_path):
             audio_file = FSInputFile(file_path)
             
-            # Кнопки под отправленным треком: сохранить в плейлист
             markup = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="❤️ В мой плейлист", callback_data=f"add_pl_{track_url[:50]}")]
             ])
 
             await callback.message.answer_audio(audio=audio_file, caption=f"🎧 {title}", reply_markup=markup)
-            await callback.message.delete() # Удаляем плашку "скачиваю..."
+            await callback.message.delete()
             os.remove(file_path)
         else:
             await callback.message.edit_text("❌ Не удалось скачать файл.")
@@ -145,13 +147,12 @@ async def process_download(callback: CallbackQuery):
     except Exception as e:
         await callback.message.edit_text(f"⚠️ Ошибка: {e}")
 
-# Добавление трека в плейлист
+# Добавление в плейлист
 @dp.callback_query(F.data.startswith("add_pl_"))
 async def add_to_playlist(callback: CallbackQuery):
     url = callback.data[7:]
     user_id = str(callback.from_user.id)
     
-    # Быстро узнаем название по URL
     try:
         with yt_dlp.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -163,7 +164,6 @@ async def add_to_playlist(callback: CallbackQuery):
     if user_id not in playlists:
         playlists[user_id] = []
 
-    # Проверяем, нет ли уже такого трека
     if not any(t['url'] == url for t in playlists[user_id]):
         playlists[user_id].append({'title': title, 'url': url})
         save_playlists(playlists)
@@ -172,9 +172,9 @@ async def add_to_playlist(callback: CallbackQuery):
         await callback.answer("ℹ️ Этот трек уже есть в твоем плейлисте.", show_alert=True)
 
 async def main():
-    print("Бот с плейлистами запущен...")
+    print("Бот запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-      
+    
