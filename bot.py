@@ -26,8 +26,8 @@ def save_playlists(data):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "🎵 **Музыкальный бот с плейлистами готов!**\n\n"
-        "• Отправь название трека, и я найду несколько вариантов.\n"
+        "🎵 **Музыкальный бот готов!**\n\n"
+        "• Отправь название трека или исполнителя, и я найду его.\n"
         "• Используй /playlist, чтобы посмотреть сохраненные треки."
     )
 
@@ -45,8 +45,9 @@ async def cmd_playlist(message: Message):
     
     for idx, track in enumerate(playlists[user_id]):
         title = track['title']
+        url = track['url']
         text += f"{idx + 1}. {title}\n"
-        keyboard.append([InlineKeyboardButton(text=f"▶️ {title[:30]}...", callback_data=f"play_saved_{idx}")])
+        keyboard.append([InlineKeyboardButton(text=f"▶️ Скачать: {title[:25]}...", callback_data=f"dl_{url[:50]}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     await message.answer(text, reply_markup=markup, parse_mode="Markdown")
@@ -57,44 +58,46 @@ async def search_music(message: Message):
     if query.startswith("/"):
         return
 
-    waiting_msg = await message.answer(f"🔍 Ищу варианты для: *{query}*...", parse_mode="Markdown")
+    waiting_msg = await message.answer(f"🔍 Ищу: *{query}*...", parse_mode="Markdown")
 
     ydl_opts = {
-        'default_search': 'ytsearch3',
+        'format': 'bestaudio/best',
+        'default_search': 'ytsearch1',
         'noplaylist': True,
-        'extract_flat': True,
-        'quiet': True
+        'quiet': True,
+        'extract_flat': False
     }
 
     try:
         def search():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Сначала ищем по точному запросу пользователя
+                # Ищем по запросу пользователя
                 info = ydl.extract_info(query, download=False)
-                entries = info.get('entries', [])
+                if 'entries' in info and info['entries']:
+                    return info['entries'][0]
                 
-                # Если ничего не нашли, смягчаем поиск и добавляем "audio"
-                if not entries:
-                    info = ydl.extract_info(f"{query} audio", download=False)
-                    entries = info.get('entries', [])
-                return entries
+                # Если не нашлось, пробуем добавить "audio"
+                info_alt = ydl.extract_info(f"{query} audio", download=False)
+                if 'entries' in info_alt and info_alt['entries']:
+                    return info_alt['entries'][0]
+                
+                return None
 
         loop = asyncio.get_running_loop()
-        entries = await loop.run_in_executor(None, search)
+        info = await loop.run_in_executor(None, search)
 
-        if not entries:
-            await waiting_msg.edit_text("❌ Ничего не найдено. Попробуй указать исполнителя и название точнее (например: *АлСми - Рюмочка водочки*).")
+        if not info:
+            await waiting_msg.edit_text("❌ Ничего не найдено. Попробуй написать точнее (например: *АлСми - Рюмочка водочки*).")
             return
 
-        keyboard = []
-        for entry in entries:
-            title = entry.get('title', 'Unknown Track')
-            url = entry.get('url') or f"https://www.youtube.com/watch?v={entry.get('id')}"
-            btn_text = title[:45] + ("..." if len(title) > 45 else "")
-            keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"dl_{url[:50]}")])
+        title = info.get('title', 'Unknown Track')
+        url = info.get('webpage_url') or f"https://www.youtube.com/watch?v={info.get('id')}"
 
-        markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-        await waiting_msg.edit_text("🎵 Выбери трек для скачивания:", reply_markup=markup)
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"📥 Скачать трек", callback_data=f"dl_{url[:50]}")]
+        ])
+
+        await waiting_msg.edit_text(f"🎵 <b>{title}</b>", reply_markup=markup, parse_mode="HTML")
 
     except Exception as e:
         await waiting_msg.edit_text(f"⚠️ Ошибка при поиске: {e}")
@@ -154,7 +157,7 @@ async def add_to_playlist(callback: CallbackQuery):
     user_id = str(callback.from_user.id)
     
     try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'extract_flat': True}) as ydl:
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'Трек из плейлиста')
     except:
