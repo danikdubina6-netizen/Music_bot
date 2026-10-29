@@ -1,6 +1,7 @@
 import asyncio
 import glob
 import os
+import re
 import json
 import html
 from aiogram import Bot, Dispatcher, F
@@ -47,6 +48,36 @@ def base_opts():
 
 
 TITLES = {}  # id -> название, для запасного поиска на SoundCloud
+
+
+def clean_title(t: str) -> str:
+    """Убирает из названия мусор вроде (official audio), [HD], 'клип'."""
+    t = re.sub(r"[\(\[].*?[\)\]]", " ", t)
+    t = re.sub(r"(?i)\b(official|audio|video|lyrics|hd|hq|клип|премьера)\b", " ", t)
+    return re.sub(r"\s+", " ", t).strip(" -–—|")
+
+
+def soundcloud_urls(title: str):
+    """Ищет трек на SoundCloud, возвращает список ссылок."""
+    urls = []
+    for q in dict.fromkeys([clean_title(title), title]):
+        if not q:
+            continue
+        try:
+            opts = base_opts()
+            opts["extract_flat"] = True
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"scsearch5:{q}", download=False)
+            for e in (info or {}).get("entries") or []:
+                u = e.get("url") or e.get("webpage_url")
+                if u and u not in urls:
+                    urls.append(u)
+        except Exception as err:
+            print(f"[SoundCloud search error] {q!r}: {err}", flush=True)
+        if urls:
+            break
+    print(f"[SoundCloud] found: {urls}", flush=True)
+    return urls
 
 
 def video_url(video_id: str) -> str:
@@ -147,27 +178,45 @@ async def process_download(callback: CallbackQuery):
             info = info["entries"][0]
         return info
 
+    def find_files():
+        found = [f for f in glob.glob(f"{DOWNLOAD_DIR}/{video_id}.*")
+                 if not f.endswith((".part", ".ytdl"))]
+        found.sort(key=lambda f: 0 if f.endswith(".mp3") else 1)
+        return found
+
     def download():
         source = "YouTube"
         try:
             info = run(video_url(video_id))
         except Exception as yt_err:
+            yt_msg = str(yt_err).strip().split("\n")[0][:150]
             print(f"[YouTube error] {yt_err}", flush=True)
             # YouTube блокирует IP -> пробуем SoundCloud по названию
             title = TITLES.get(video_id)
             if not title:
                 raise yt_err
             source = "SoundCloud"
-            info = run(f"scsearch1:{title}")
+            urls = soundcloud_urls(title)
+            if not urls:
+                raise RuntimeError(f"YouTube не пускает, а на SoundCloud ничего не найдено. ({yt_msg})")
+            info, last_err = None, None
+            for u in urls[:5]:
+                try:
+                    info = run(u)
+                except Exception as e:
+                    last_err = e
+                    print(f"[SoundCloud download error] {u}: {e}", flush=True)
+                    continue
+                if find_files():
+                    break
+            else:
+                raise RuntimeError(f"SoundCloud не скачал: {str(last_err)[:150] or 'нет файла'}")
 
-        # ищем реально скачанный файл (mp3 в приоритете)
-        found = [f for f in glob.glob(f"{DOWNLOAD_DIR}/{video_id}.*")
-                 if not f.endswith((".part", ".ytdl"))]
-        found.sort(key=lambda f: 0 if f.endswith(".mp3") else 1)
+        found = find_files()
         print(f"[{source}] files: {found}", flush=True)
         if not found:
             raise RuntimeError(f"файл не появился (источник: {source})")
-        return found[0], info.get("title", "Track"), info.get("uploader")
+        return found[0], (info or {}).get("title", "Track"), (info or {}).get("uploader")
 
     file_path = None
     try:
