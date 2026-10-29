@@ -1,4 +1,5 @@
 import asyncio
+import glob
 import os
 import json
 import html
@@ -147,28 +148,31 @@ async def process_download(callback: CallbackQuery):
         return info
 
     def download():
+        source = "YouTube"
         try:
             info = run(video_url(video_id))
         except Exception as yt_err:
+            print(f"[YouTube error] {yt_err}", flush=True)
             # YouTube блокирует IP -> пробуем SoundCloud по названию
             title = TITLES.get(video_id)
             if not title:
                 raise yt_err
+            source = "SoundCloud"
             info = run(f"scsearch1:{title}")
-        return (
-            os.path.join(DOWNLOAD_DIR, f"{video_id}.mp3"),
-            info.get("title", "Track"),
-            info.get("uploader"),
-        )
+
+        # ищем реально скачанный файл (mp3 в приоритете)
+        found = [f for f in glob.glob(f"{DOWNLOAD_DIR}/{video_id}.*")
+                 if not f.endswith((".part", ".ytdl"))]
+        found.sort(key=lambda f: 0 if f.endswith(".mp3") else 1)
+        print(f"[{source}] files: {found}", flush=True)
+        if not found:
+            raise RuntimeError(f"файл не появился (источник: {source})")
+        return found[0], info.get("title", "Track"), info.get("uploader")
 
     file_path = None
     try:
         loop = asyncio.get_running_loop()
         file_path, title, performer = await loop.run_in_executor(None, download)
-
-        if not os.path.exists(file_path):
-            await callback.message.edit_text("❌ Не удалось скачать файл.")
-            return
 
         if os.path.getsize(file_path) > 49 * 1024 * 1024:
             await callback.message.edit_text("❌ Файл больше 50 МБ — Telegram не даст отправить.")
@@ -177,15 +181,23 @@ async def process_download(callback: CallbackQuery):
         markup = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="❤️ В мой плейлист", callback_data=f"add_{video_id}")
         ]])
-        await callback.message.answer_audio(
-            audio=FSInputFile(file_path),
-            title=title,
-            performer=performer,
-            caption=f"🎧 {html.escape(title)}",
-            reply_markup=markup,
-        )
+        if file_path.endswith((".mp3", ".m4a")):
+            await callback.message.answer_audio(
+                audio=FSInputFile(file_path),
+                title=title,
+                performer=performer,
+                caption=f"🎧 {html.escape(title)}",
+                reply_markup=markup,
+            )
+        else:
+            await callback.message.answer_document(
+                document=FSInputFile(file_path),
+                caption=f"🎧 {html.escape(title)}",
+                reply_markup=markup,
+            )
         await callback.message.delete()
     except Exception as e:
+        print(f"[download error] {e!r}", flush=True)
         await callback.message.edit_text(f"⚠️ Ошибка скачивания: {html.escape(str(e))[:300]}")
     finally:
         if file_path and os.path.exists(file_path):
