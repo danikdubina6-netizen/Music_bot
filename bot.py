@@ -4,6 +4,7 @@ import json
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
+from duckduckgo_search import DDGS
 import yt_dlp
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -51,7 +52,7 @@ async def cmd_playlist(message: Message):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     await message.answer(text, reply_markup=markup, parse_mode="Markdown")
 
-# Прямой и стабильный поиск через yt-dlp
+# Поиск через DuckDuckGo (обход капч и блокировок YouTube)
 @dp.message(F.text)
 async def search_music(message: Message):
     query = message.text
@@ -60,32 +61,20 @@ async def search_music(message: Message):
 
     waiting_msg = await message.answer(f"🔍 Ищу: *{query}*...", parse_mode="Markdown")
 
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'default_search': 'ytsearch1',
-        'noplaylist': True,
-        'quiet': True,
-        'extract_flat': False,
-        'socket_timeout': 10
-    }
-
     try:
-        def search():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(query, download=False)
-                if 'entries' in info and info['entries']:
-                    return info['entries'][0]
-                return None
+        def search_ddg():
+            with DDGS() as ddgs:
+                results = [r for r in ddgs.text(f"{query} site:youtube.com/watch", max_results=1)]
+                if results:
+                    return results[0]['href'], results[0]['title']
+            return None, None
 
         loop = asyncio.get_running_loop()
-        info = await loop.run_in_executor(None, search)
+        url, title = await loop.run_in_executor(None, search_ddg)
 
-        if not info:
+        if not url:
             await waiting_msg.edit_text("❌ Ничего не найдено. Попробуй изменить запрос.")
             return
-
-        title = info.get('title', 'Unknown Track')
-        url = info.get('webpage_url') or f"https://www.youtube.com/watch?v={info.get('id')}"
 
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"📥 Скачать трек", callback_data=f"dl_{url}")]
@@ -175,4 +164,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                   
