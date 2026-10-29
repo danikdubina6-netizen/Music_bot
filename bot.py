@@ -62,12 +62,48 @@ def tokens(t: str) -> set:
     return {w for w in re.findall(r"\w+", t) if len(w) > 1}
 
 
+# на SoundCloud треки часто лежат под названием группы, а не исполнителя
+ALIASES = {"цой": {"кино", "kino"}}
+
+
+def split_title(title: str):
+    """'Виктор Цой - Сказка' -> ('Виктор Цой', 'Сказка')."""
+    parts = re.split(r"\s[-–—|]\s", clean_title(title), maxsplit=1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return "", parts[0]
+
+
+def match_score(wanted: str, cand_title: str, cand_uploader: str) -> float:
+    """>0 только если название песни совпало полностью, а исполнитель хотя бы частично."""
+    artist, song = split_title(wanted)
+    song_t, artist_t = tokens(song), tokens(artist)
+    cand = tokens(f"{cand_title} {cand_uploader}")
+    if not song_t:
+        return 0.0
+    if len(song_t & cand) < len(song_t):
+        return 0.0
+    if not artist_t:
+        return 1.0
+    expanded = set(artist_t)
+    for w in artist_t:
+        expanded |= ALIASES.get(w, set())
+    if not (expanded & cand):
+        return 0.0
+    return 1.0 + len(artist_t & cand) / len(artist_t) * 0.5
+
+
 def soundcloud_urls(title: str):
-    """Ищет трек на SoundCloud, оставляет только точные совпадения по названию."""
-    wanted = tokens(clean_title(title))
-    if not wanted:
-        return []
-    for q in dict.fromkeys([clean_title(title), title]):
+    """Ищет трек на SoundCloud, оставляет только точные совпадения."""
+    artist, song = split_title(title)
+    queries = [clean_title(title), title]
+    for w in tokens(artist):
+        for alias in ALIASES.get(w, ()):
+            queries.append(f"{alias} {song}")
+
+    for q in dict.fromkeys(queries):
+        if not q.strip():
+            continue
         try:
             opts = base_opts()
             opts["extract_flat"] = True
@@ -82,13 +118,12 @@ def soundcloud_urls(title: str):
             u = e.get("url") or e.get("webpage_url")
             if not u:
                 continue
-            cand = tokens(f"{e.get('title', '')} {e.get('uploader', '')}")
-            score = len(wanted & cand) / len(wanted)
-            scored.append((score, u, e.get("title")))
+            sc = match_score(title, e.get("title") or "", e.get("uploader") or "")
+            scored.append((sc, u, e.get("title")))
         scored.sort(key=lambda x: -x[0])
         print(f"[SoundCloud] {q!r}: {[(round(sc, 2), t) for sc, _, t in scored[:5]]}", flush=True)
 
-        good = [u for sc, u, _ in scored if sc >= 0.75]
+        good = [u for sc, u, _ in scored if sc > 0]
         if good:
             return good
     return []
