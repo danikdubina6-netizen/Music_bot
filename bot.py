@@ -57,27 +57,41 @@ def clean_title(t: str) -> str:
     return re.sub(r"\s+", " ", t).strip(" -–—|")
 
 
+def tokens(t: str) -> set:
+    t = t.lower().replace("ё", "е")
+    return {w for w in re.findall(r"\w+", t) if len(w) > 1}
+
+
 def soundcloud_urls(title: str):
-    """Ищет трек на SoundCloud, возвращает список ссылок."""
-    urls = []
+    """Ищет трек на SoundCloud, оставляет только точные совпадения по названию."""
+    wanted = tokens(clean_title(title))
+    if not wanted:
+        return []
     for q in dict.fromkeys([clean_title(title), title]):
-        if not q:
-            continue
         try:
             opts = base_opts()
             opts["extract_flat"] = True
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(f"scsearch5:{q}", download=False)
-            for e in (info or {}).get("entries") or []:
-                u = e.get("url") or e.get("webpage_url")
-                if u and u not in urls:
-                    urls.append(u)
+                info = ydl.extract_info(f"scsearch10:{q}", download=False)
         except Exception as err:
             print(f"[SoundCloud search error] {q!r}: {err}", flush=True)
-        if urls:
-            break
-    print(f"[SoundCloud] found: {urls}", flush=True)
-    return urls
+            continue
+
+        scored = []
+        for e in (info or {}).get("entries") or []:
+            u = e.get("url") or e.get("webpage_url")
+            if not u:
+                continue
+            cand = tokens(f"{e.get('title', '')} {e.get('uploader', '')}")
+            score = len(wanted & cand) / len(wanted)
+            scored.append((score, u, e.get("title")))
+        scored.sort(key=lambda x: -x[0])
+        print(f"[SoundCloud] {q!r}: {[(round(sc, 2), t) for sc, _, t in scored[:5]]}", flush=True)
+
+        good = [u for sc, u, _ in scored if sc >= 0.75]
+        if good:
+            return good
+    return []
 
 
 def video_url(video_id: str) -> str:
@@ -198,7 +212,7 @@ async def process_download(callback: CallbackQuery):
             source = "SoundCloud"
             urls = soundcloud_urls(title)
             if not urls:
-                raise RuntimeError(f"YouTube не пускает, а на SoundCloud ничего не найдено. ({yt_msg})")
+                raise RuntimeError(f"YouTube не пускает, а точного совпадения на SoundCloud нет. ({yt_msg})")
             info, last_err = None, None
             for u in urls[:5]:
                 try:
