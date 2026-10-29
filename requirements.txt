@@ -1,3 +1,2 @@
-aiogram
+aiogram>=3.4
 yt-dlp
-duckduckgo_search
