@@ -1,7 +1,6 @@
 import asyncio
 import os
 import json
-import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
@@ -26,9 +25,9 @@ def save_playlists(data):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "🎵 **Музыкальный бот на связи!**\n\n"
-        "• Напиши название трека (например: *АлСми - Рюмочка водочки*), и я найду его без капч и блокировок.\n"
-        "• /playlist — твой сохраненный список треков."
+        "🎵 **Музыкальный бот готов к работе!**\n\n"
+        "• Отправь название трека или исполнителя (например: *АлСми - Рюмочка водочки*).\n"
+        "• Используй /playlist, чтобы посмотреть свои сохраненные треки."
     )
 
 @dp.message(Command("playlist"))
@@ -52,7 +51,7 @@ async def cmd_playlist(message: Message):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     await message.answer(text, reply_markup=markup, parse_mode="Markdown")
 
-# Поиск через публичные API Invidious (обход блокировок YouTube)
+# Прямой и стабильный поиск через yt-dlp
 @dp.message(F.text)
 async def search_music(message: Message):
     query = message.text
@@ -61,42 +60,43 @@ async def search_music(message: Message):
 
     waiting_msg = await message.answer(f"🔍 Ищу: *{query}*...", parse_mode="Markdown")
 
-    # Публичные инстансы Invidious для быстрого поиска без капч
-    instances = [
-        "https://invidious.privacyredirect.com",
-        "https://inv.nadeko.net",
-        "https://vid.puffyan.us"
-    ]
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'default_search': 'ytsearch1',
+        'noplaylist': True,
+        'quiet': True,
+        'extract_flat': False,
+        'socket_timeout': 10
+    }
 
-    video_id = None
-    title = None
+    try:
+        def search():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(query, download=False)
+                if 'entries' in info and info['entries']:
+                    return info['entries'][0]
+                return None
 
-    async with aiohttp.ClientSession() as session:
-        for instance in instances:
-            try:
-                async with session.get(f"{instance}/api/v1/search", params={"q": query, "type": "video"}, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data and len(data) > 0:
-                            video_id = data[0]["videoId"]
-                            title = data[0]["title"]
-                            break
-            except Exception:
-                continue
+        loop = asyncio.get_running_loop()
+        info = await loop.run_in_executor(None, search)
 
-    if not video_id:
-        await waiting_msg.edit_text("❌ Не удалось найти трек. Попробуй изменить запрос.")
-        return
+        if not info:
+            await waiting_msg.edit_text("❌ Ничего не найдено. Попробуй изменить запрос.")
+            return
 
-    url = f"https://www.youtube.com/watch?v={video_id}"
+        title = info.get('title', 'Unknown Track')
+        url = info.get('webpage_url') or f"https://www.youtube.com/watch?v={info.get('id')}"
 
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"📥 Скачать трек", callback_data=f"dl_{url}")]
-    ])
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"📥 Скачать трек", callback_data=f"dl_{url}")]
+        ])
 
-    await waiting_msg.edit_text(f"🎵 <b>{title}</b>", reply_markup=markup, parse_mode="HTML")
+        await waiting_msg.edit_text(f"🎵 <b>{title}</b>", reply_markup=markup, parse_mode="HTML")
 
-# Скачивание трека через yt-dlp по прямой ссылке (ссылки на конкретные видео YouTube скачивает без проблем)
+    except Exception as e:
+        await waiting_msg.edit_text(f"⚠️ Ошибка поиска: {e}")
+
+# Скачивание выбранного трека
 @dp.callback_query(F.data.startswith("dl_"))
 async def process_download(callback: CallbackQuery):
     url = callback.data[3:]
@@ -175,4 +175,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
