@@ -1,7 +1,7 @@
 name: Telegram Music Bot
 
 on:
-  workflow_dispatch:  # Ручной запуск
+  workflow_dispatch:  # Ручной запуск кнопкой на вкладке Actions
   schedule:
     - cron: '0 */5 * * *'  # Автоматический перезапуск каждые 5 часов
 
@@ -18,15 +18,17 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install FFmpeg (required for yt-dlp audio conversion)
+    - name: Install FFmpeg (required for audio conversion)
       run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install --upgrade yt-dlp
         pip install -r requirements.txt
 
     - name: Run Bot
       env:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       run: python bot.py
+      
